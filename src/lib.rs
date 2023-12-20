@@ -17,6 +17,8 @@ mod test_util {
     use crate::packs::{self};
 
     pub const SIMPLE_APP: &str = "tests/fixtures/simple_app";
+    pub const SIMPLE_APP_WITH_OVERRIDES: &str =
+        "tests/fixtures/simple_app_with_overrides";
 
     pub fn get_absolute_root(fixture_name: &str) -> PathBuf {
         PathBuf::from(fixture_name).canonicalize().unwrap()
@@ -33,6 +35,7 @@ mod test_util {
             &absolute_root,
             &configuration.cache_directory,
             true,
+            &configuration.namespace_overrides,
         )
     }
 

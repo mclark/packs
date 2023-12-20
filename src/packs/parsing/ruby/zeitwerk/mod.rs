@@ -27,12 +27,14 @@ pub fn get_zeitwerk_constant_resolver(
     absolute_root: &Path,
     cache_dir: &Path,
     cache_disabled: bool,
+    namespace_overrides: &HashMap<PathBuf, String>,
 ) -> Box<dyn ConstantResolver + Send + Sync> {
     let constants = inferred_constants_from_pack_set(
         pack_set,
         absolute_root,
         cache_dir,
         cache_disabled,
+        namespace_overrides,
     );
 
     ZeitwerkConstantResolver::create(constants)
@@ -43,6 +45,7 @@ fn inferred_constants_from_pack_set(
     absolute_root: &Path,
     cache_dir: &Path,
     cache_disabled: bool,
+    namespace_overrides: &HashMap<PathBuf, String>,
 ) -> Vec<ConstantDefinition> {
     let autoload_paths = get_autoload_paths(&pack_set.packs);
     inferred_constants_from_autoload_paths(
@@ -50,6 +53,7 @@ fn inferred_constants_from_pack_set(
         absolute_root,
         cache_dir,
         cache_disabled,
+        namespace_overrides,
     )
 }
 
@@ -58,6 +62,7 @@ fn inferred_constants_from_autoload_paths(
     absolute_root: &Path,
     cache_dir: &Path,
     cache_disabled: bool,
+    namespace_overrides: &HashMap<PathBuf, String>,
 ) -> Vec<ConstantDefinition> {
     debug!("Get constant resolver cache");
     let cache_data = get_constant_resolver_cache(cache_dir);
@@ -128,6 +133,8 @@ fn inferred_constants_from_autoload_paths(
                     absolute_path_of_definition,
                     absolute_autoload_path,
                     acronyms,
+                    namespace_overrides,
+                    absolute_root,
                 )
             }
         })
@@ -143,6 +150,8 @@ fn inferred_constant_from_file(
     absolute_path: &Path,
     absolute_autoload_path: &PathBuf,
     acronyms: &HashSet<String>,
+    namespace_overrides: &HashMap<PathBuf, String>,
+    absolute_root: &Path,
 ) -> ConstantDefinition {
     let relative_path =
         absolute_path.strip_prefix(absolute_autoload_path).unwrap();
@@ -153,10 +162,25 @@ fn inferred_constant_from_file(
     let camelized_path = inflector_shim::camelize(relative_path_str, acronyms);
     let fully_qualified_name = format!("::{}", camelized_path);
 
-    let absolute_path_of_definition = absolute_path.to_path_buf();
+    if !namespace_overrides.is_empty() {
+        let relative_autoload_path =
+            absolute_autoload_path.strip_prefix(absolute_root).unwrap();
+
+        if let Some(override_namespace) =
+            namespace_overrides.get(relative_autoload_path)
+        {
+            let fully_qualified_name =
+                format!("{}::{}", override_namespace, camelized_path);
+            return ConstantDefinition {
+                fully_qualified_name,
+                absolute_path_of_definition: absolute_path.to_path_buf(),
+            };
+        }
+    }
+
     ConstantDefinition {
         fully_qualified_name,
-        absolute_path_of_definition,
+        absolute_path_of_definition: absolute_path.to_path_buf(),
     }
 }
 
@@ -248,7 +272,7 @@ mod tests {
 
     use crate::test_util::{
         get_absolute_root, get_zeitwerk_constant_resolver_for_fixture,
-        SIMPLE_APP,
+        SIMPLE_APP, SIMPLE_APP_WITH_OVERRIDES,
     };
     use pretty_assertions::assert_eq;
 
@@ -263,6 +287,30 @@ mod tests {
             get_zeitwerk_constant_resolver_for_fixture(SIMPLE_APP)
                 .resolve(&String::from("Foo"), &[])
                 .unwrap()
+        );
+
+        teardown();
+    }
+
+    #[test]
+    fn constant_in_overridden_namespace() {
+        assert_eq!(
+            vec![ConstantDefinition {
+                fully_qualified_name:
+                    "::CustomNamespace::NestedClassInAutoloadRoot".to_string(),
+                absolute_path_of_definition: get_absolute_root(
+                    SIMPLE_APP_WITH_OVERRIDES
+                )
+                .join("app/services/nested_class_in_autoload_root.rb")
+            }],
+            get_zeitwerk_constant_resolver_for_fixture(
+                SIMPLE_APP_WITH_OVERRIDES
+            )
+            .resolve(
+                &String::from("NestedClassInAutoloadRoot"),
+                &["CustomNamespace"]
+            )
+            .unwrap()
         );
 
         teardown();
@@ -382,6 +430,7 @@ mod tests {
             absolute_root,
             &configuration.cache_directory,
             !configuration.cache_enabled,
+            &configuration.namespace_overrides,
         );
         let actual_constant_map = constant_resolver
             .fully_qualified_constant_name_to_constant_definition_map();
