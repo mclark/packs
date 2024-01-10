@@ -69,7 +69,11 @@ impl CheckerInterface for Checker {
 
             let constant_is_in_private_namespace =
                 private_constants.iter().any(|private_constant| {
-                    reference.constant_name.starts_with(private_constant)
+                    reference.constant_name.as_str() == private_constant
+                        || reference.constant_name.starts_with(&format!(
+                            "{}::",
+                            private_constant
+                        ))
                 });
 
             if !constant_is_private && !constant_is_in_private_namespace {
