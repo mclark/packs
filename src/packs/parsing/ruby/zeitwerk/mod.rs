@@ -47,7 +47,14 @@ fn inferred_constants_from_pack_set(
     cache_disabled: bool,
     namespace_overrides: &HashMap<PathBuf, String>,
 ) -> Vec<ConstantDefinition> {
-    let autoload_paths = get_autoload_paths(&pack_set.packs);
+    let absolute_namespace_overrides = namespace_overrides
+    .iter()
+    .map(|(relative_path, namespace)| {
+        (absolute_root.join(relative_path), namespace.to_owned())
+    })
+    .collect::<HashMap<PathBuf, String>>();
+
+    let autoload_paths = get_autoload_paths(&pack_set.packs, &absolute_namespace_overrides);
     inferred_constants_from_autoload_paths(
         autoload_paths,
         absolute_root,
@@ -229,7 +236,7 @@ fn cache_constant_definitions(
         .unwrap();
 }
 
-fn get_autoload_paths(packs: &Vec<Pack>) -> Vec<PathBuf> {
+fn get_autoload_paths(packs: &Vec<Pack>, namespace_overrides: &HashMap<PathBuf, String>) -> Vec<PathBuf> {
     let mut autoload_paths: Vec<PathBuf> = Vec::new();
 
     debug!("Getting autoload paths");
@@ -251,6 +258,11 @@ fn get_autoload_paths(packs: &Vec<Pack>) -> Vec<PathBuf> {
         let concerns_glob_pattern = concerns_paths.to_str().unwrap();
 
         process_glob_pattern(concerns_glob_pattern, &mut autoload_paths);
+    }
+
+    // TODO: all this autoload stuff is pretty hacky, especially what follows. We need to clean it up.
+    for (namespace_override, _) in namespace_overrides {
+        autoload_paths.push(namespace_override.to_owned());
     }
 
     debug!("Finished getting autoload paths");
