@@ -52,7 +52,7 @@ pub(crate) fn get_all_references(
             &configuration.absolute_root,
             &configuration.cache_directory,
             !configuration.cache_enabled,
-            &configuration.namespace_overrides,
+            &configuration.autoload_roots,
         );
 
         (constant_resolver, processed_files)

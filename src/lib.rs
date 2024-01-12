@@ -35,7 +35,7 @@ mod test_util {
             &absolute_root,
             &configuration.cache_directory,
             true,
-            &configuration.namespace_overrides,
+            &configuration.autoload_roots,
         )
     }
 

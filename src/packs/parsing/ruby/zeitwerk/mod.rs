@@ -12,8 +12,7 @@ use tracing::debug;
 use crate::packs::{
     caching::create_cache_dir_idempotently,
     constant_resolver::{ConstantDefinition, ConstantResolver},
-    file_utils::process_glob_pattern,
-    pack::Pack,
+    file_utils::expand_glob,
     parsing::ruby::rails_utils::get_acronyms_from_disk,
     PackSet,
 };
@@ -27,14 +26,14 @@ pub fn get_zeitwerk_constant_resolver(
     absolute_root: &Path,
     cache_dir: &Path,
     cache_disabled: bool,
-    namespace_overrides: &HashMap<PathBuf, String>,
+    autoload_root_globs: &HashMap<PathBuf, String>,
 ) -> Box<dyn ConstantResolver + Send + Sync> {
     let constants = inferred_constants_from_pack_set(
         pack_set,
         absolute_root,
         cache_dir,
         cache_disabled,
-        namespace_overrides,
+        autoload_root_globs,
     );
 
     ZeitwerkConstantResolver::create(constants)
@@ -45,38 +44,44 @@ fn inferred_constants_from_pack_set(
     absolute_root: &Path,
     cache_dir: &Path,
     cache_disabled: bool,
-    namespace_overrides: &HashMap<PathBuf, String>,
+    autoload_root_globs: &HashMap<PathBuf, String>,
 ) -> Vec<ConstantDefinition> {
-    let absolute_namespace_overrides = namespace_overrides
-    .iter()
-    .map(|(relative_path, namespace)| {
-        (absolute_root.join(relative_path), namespace.to_owned())
-    })
-    .collect::<HashMap<PathBuf, String>>();
+    // build the full list of default autoload roots from the pack set, using the default namespace for each.
+    let mut autoload_roots: HashMap<PathBuf, String> = pack_set
+        .packs
+        .iter()
+        .flat_map(|pack| pack.default_autoload_roots())
+        .map(|path| (path, String::from(""))).collect();
 
-    let autoload_paths = get_autoload_paths(&pack_set.packs, &absolute_namespace_overrides);
+    // override the default autoload roots with any that may have been explicitly specified.
+    autoload_root_globs.iter().for_each(|(rel_path, ns)| {
+        let abs_path = absolute_root.join(rel_path);
+        let ns = if ns == "::Object" { String::from("") } else { ns.to_owned() };
+        expand_glob(abs_path.to_str().unwrap())
+            .iter()
+            .for_each(|path| { autoload_roots.insert(path.to_owned(), ns.clone()); });
+    });
+
     inferred_constants_from_autoload_paths(
-        autoload_paths,
+        autoload_roots,
         absolute_root,
         cache_dir,
         cache_disabled,
-        namespace_overrides,
     )
 }
 
 fn inferred_constants_from_autoload_paths(
-    autoload_paths: Vec<PathBuf>,
+    autoload_roots: HashMap<PathBuf, String>,
     absolute_root: &Path,
     cache_dir: &Path,
     cache_disabled: bool,
-    namespace_overrides: &HashMap<PathBuf, String>,
 ) -> Vec<ConstantDefinition> {
     debug!("Get constant resolver cache");
     let cache_data = get_constant_resolver_cache(cache_dir);
 
     debug!("Globbing out autoload paths");
     // First, we get a map of each autoload path to the files they map to.
-    let autoload_paths_to_their_globbed_files = autoload_paths
+    let autoload_paths_to_their_globbed_files = autoload_roots.keys()
         .into_iter()
         .par_bridge()
         .map(|absolute_autoload_path| {
@@ -88,8 +93,7 @@ fn inferred_constants_from_autoload_paths(
                 .collect::<Vec<PathBuf>>();
 
             (absolute_autoload_path, files)
-        })
-        .collect::<HashMap<PathBuf, Vec<PathBuf>>>();
+        }).collect::<HashMap<&PathBuf, Vec<PathBuf>>>();
 
     debug!("Finding autoload path for each file");
     // Then, we want to know *which* autoload path is the one that defines a given constant.
@@ -136,12 +140,14 @@ fn inferred_constants_from_autoload_paths(
                         .to_owned(),
                 }
             } else {
+                let default_namespace = autoload_roots
+                    .get(absolute_autoload_path)
+                    .unwrap();
                 inferred_constant_from_file(
                     absolute_path_of_definition,
                     absolute_autoload_path,
                     acronyms,
-                    namespace_overrides,
-                    absolute_root,
+                    default_namespace,
                 )
             }
         })
@@ -157,8 +163,7 @@ fn inferred_constant_from_file(
     absolute_path: &Path,
     absolute_autoload_path: &PathBuf,
     acronyms: &HashSet<String>,
-    namespace_overrides: &HashMap<PathBuf, String>,
-    absolute_root: &Path,
+    default_namespace: &String,
 ) -> ConstantDefinition {
     let relative_path =
         absolute_path.strip_prefix(absolute_autoload_path).unwrap();
@@ -167,23 +172,7 @@ fn inferred_constant_from_file(
 
     let relative_path_str = relative_path.to_str().unwrap();
     let camelized_path = inflector_shim::camelize(relative_path_str, acronyms);
-    let fully_qualified_name = format!("::{}", camelized_path);
-
-    if !namespace_overrides.is_empty() {
-        let relative_autoload_path =
-            absolute_autoload_path.strip_prefix(absolute_root).unwrap();
-
-        if let Some(override_namespace) =
-            namespace_overrides.get(relative_autoload_path)
-        {
-            let fully_qualified_name =
-                format!("{}::{}", override_namespace, camelized_path);
-            return ConstantDefinition {
-                fully_qualified_name,
-                absolute_path_of_definition: absolute_path.to_path_buf(),
-            };
-        }
-    }
+    let fully_qualified_name = format!("{}::{}", default_namespace, camelized_path);
 
     ConstantDefinition {
         fully_qualified_name,
@@ -234,40 +223,6 @@ fn cache_constant_definitions(
     create_cache_dir_idempotently(cache_dir);
     std::fs::write(cache_dir.join("constant_resolver.json"), cache_data_json)
         .unwrap();
-}
-
-fn get_autoload_paths(packs: &Vec<Pack>, namespace_overrides: &HashMap<PathBuf, String>) -> Vec<PathBuf> {
-    let mut autoload_paths: Vec<PathBuf> = Vec::new();
-
-    debug!("Getting autoload paths");
-
-    for pack in packs {
-        // App paths
-        let app_paths = pack.yml.parent().unwrap().join("app").join("*");
-        let app_glob_pattern = app_paths.to_str().unwrap();
-        process_glob_pattern(app_glob_pattern, &mut autoload_paths);
-
-        // Concerns paths
-        let concerns_paths = pack
-            .yml
-            .parent()
-            .unwrap()
-            .join("app")
-            .join("*")
-            .join("concerns");
-        let concerns_glob_pattern = concerns_paths.to_str().unwrap();
-
-        process_glob_pattern(concerns_glob_pattern, &mut autoload_paths);
-    }
-
-    // TODO: all this autoload stuff is pretty hacky, especially what follows. We need to clean it up.
-    for (namespace_override, _) in namespace_overrides {
-        autoload_paths.push(namespace_override.to_owned());
-    }
-
-    debug!("Finished getting autoload paths");
-
-    autoload_paths
 }
 
 #[cfg(test)]
@@ -442,7 +397,7 @@ mod tests {
             absolute_root,
             &configuration.cache_directory,
             !configuration.cache_enabled,
-            &configuration.namespace_overrides,
+            &configuration.autoload_roots,
         );
         let actual_constant_map = constant_resolver
             .fully_qualified_constant_name_to_constant_definition_map();

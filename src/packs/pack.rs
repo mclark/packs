@@ -10,7 +10,7 @@ use core::hash::Hash;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
-use super::{checker::ViolationIdentifier, PackageTodo};
+use super::{checker::ViolationIdentifier, file_utils::expand_glob, PackageTodo};
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct Pack {
@@ -257,6 +257,15 @@ impl Pack {
 
     pub fn relative_yml(&self) -> PathBuf {
         self.relative_path.join("package.yml")
+    }
+
+    pub fn default_autoload_roots(&self) -> Vec<PathBuf> {
+        let root_pattern = self.yml.parent().unwrap().join("app").join("*");
+        let concerns_pattern = root_pattern.join("concerns");
+        let mut roots = expand_glob(root_pattern.to_str().unwrap());
+        roots.extend(expand_glob(concerns_pattern.to_str().unwrap()));
+
+        roots
     }
 
     pub(crate) fn enforce_architecture(&self) -> &CheckerSetting {

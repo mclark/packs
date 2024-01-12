@@ -19,7 +19,7 @@
 # Whether or not you want the cache enabled (disabled by default)
 cache: false
 
-namespace_overrides:
+autoload_roots:
   app/services: "::CustomNamespace"
 
 # Where you want the cache to be stored (default below)

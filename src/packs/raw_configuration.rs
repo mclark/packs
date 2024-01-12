@@ -60,9 +60,9 @@ pub(crate) struct RawConfiguration {
     #[serde(default)]
     pub ignored_definitions: HashMap<String, HashSet<PathBuf>>,
 
-    // Default namespace overrides for autoload roots
+    // Autoload paths used to resolve constants
     #[serde(default)]
-    pub namespace_overrides: HashMap<PathBuf, String>,
+    pub autoload_roots: HashMap<PathBuf, String>,
 
     // Use packs copy
     #[serde(default)]
