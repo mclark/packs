@@ -5,6 +5,8 @@ use clap::{Parser, Subcommand};
 use clap_derive::Args;
 use std::path::PathBuf;
 use tracing::debug;
+use pprof::ProfilerGuardBuilder;
+use std::fs::File;
 
 use super::logger::install_logger;
 
@@ -185,7 +187,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             configuration.ignore_recorded_violations =
                 ignore_recorded_violations;
-            packs::check(&configuration, files)
+
+            let guard = ProfilerGuardBuilder::default().frequency(1000).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().unwrap();
+
+            let result = packs::check(&configuration, files);
+
+            let report = guard.report().build().unwrap();
+            let file = File::create("flamegraph.svg").unwrap();
+            report.flamegraph(file).unwrap();
+
+            result
         }
         Command::CheckContents {
             ignore_recorded_violations,
