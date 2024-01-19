@@ -219,7 +219,7 @@ pub(crate) fn process_from_contents(
     };
 
     let lookup = LineColLookup::new(&contents);
-    let parser = Parser::new(contents.clone(), options);
+    let parser = Parser::new(contents.to_owned(), options);
     let parse_result = parser.do_parse();
 
     let ast_option: Option<Box<Node>> = parse_result.ast;
